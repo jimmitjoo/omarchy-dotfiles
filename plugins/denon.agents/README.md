@@ -154,10 +154,13 @@ every transcript still on disk.
 With the `denon-agent-hook` Claude Code hook wired up, every running Claude
 session gets a row at the top of the panel: repository, branch, and whether
 it is working, waiting on you, or done. Click a row to jump to its terminal.
-The bar shows a dot that breathes while a session works and pulses the
-urgent colour while one waits on a permission prompt or a question. When a session finishes
-or needs you and its window is not focused, a notification comes in; clicking
-it focuses that window.
+Under the gauges, a chip shows the most urgent state and how many sessions
+are in it: filled in the urgent colour with "!" while one waits on a
+permission prompt or a question, an accent outline with a check for a finished
+session whose window you have not looked at yet, and a spinning arc while
+they work. When a session finishes or needs you and its window is not
+focused, a notification comes in; clicking it focuses that window. Each
+session keeps one notification, updated in place rather than stacked.
 
 `agent-worktree` (bound to Super + Alt + A) starts Claude in a new terminal and
 a fresh git worktree of the focused terminal's repository, so agents working

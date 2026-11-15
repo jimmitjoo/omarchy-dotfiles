@@ -5,6 +5,7 @@ import QtQuick.Effects
 import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
+import Quickshell.Hyprland
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
@@ -55,14 +56,49 @@ Panel {
   // Live Claude Code sessions, one record each, published by the
   // denon-agent-hook Claude Code hook into a single file.
   property var sessions: []
-  // What the bar dot says: someone waiting on you beats anyone working.
-  readonly property string sessionState: {
-    var working = false
+
+  // A finished session counts as "your move" until you have looked at its
+  // window. Keyed by when it finished, so the next finish counts again.
+  // ponytail: in memory only, so a shell restart shows old finishes once more.
+  property var seenDone: ({})
+  readonly property string activeWindow: Hyprland.activeToplevel ? String(Hyprland.activeToplevel.address || "") : ""
+
+  function sameWindow(a, b) {
+    return a !== "" && String(a).replace(/^0x/, "") === String(b).replace(/^0x/, "")
+  }
+
+  function doneKey(s) { return s.id + ":" + s.since }
+
+  function markSeen() {
+    var seen = {}
+    var changed = false
     for (var i = 0; i < sessions.length; i++) {
-      if (sessions[i].state === "waiting") return "waiting"
-      if (sessions[i].state === "working") working = true
+      var s = sessions[i]
+      if (s.state !== "done") continue
+      var key = doneKey(s)
+      seen[key] = seenDone[key] === true || sameWindow(activeWindow, s.window)
+      if (seen[key] !== (seenDone[key] === true)) changed = true
     }
-    return working ? "working" : ""
+    // Rebuilt from the live sessions, so ended ones drop out of the map.
+    if (changed || Object.keys(seen).length !== Object.keys(seenDone).length) seenDone = seen
+  }
+
+  onSessionsChanged: markSeen()
+  onActiveWindowChanged: markSeen()
+
+  // What the bar chip says, most urgent first: sessions waiting on you, then
+  // finished ones you have not looked at, then the ones still working.
+  readonly property var sessionSummary: {
+    var count = { waiting: 0, done: 0, working: 0 }
+    for (var i = 0; i < sessions.length; i++) {
+      var s = sessions[i]
+      if (s.state === "done" && seenDone[doneKey(s)] === true) continue
+      if (count[s.state] !== undefined) count[s.state]++
+    }
+    var order = ["waiting", "done", "working"]
+    for (var k = 0; k < order.length; k++)
+      if (count[order[k]] > 0) return { state: order[k], count: count[order[k]], all: count }
+    return { state: "", count: 0, all: count }
   }
 
   FileView {
@@ -526,13 +562,10 @@ Panel {
       }
       bits.push(line)
     }
-    var waiting = 0, working = 0
-    for (var k = 0; k < sessions.length; k++) {
-      if (sessions[k].state === "waiting") waiting++
-      else if (sessions[k].state === "working") working++
-    }
-    if (waiting > 0) bits.push(waiting + " waiting on you")
-    if (working > 0) bits.push(working + " working")
+    var count = sessionSummary.all
+    if (count.waiting > 0) bits.push(count.waiting + " waiting on you")
+    if (count.done > 0) bits.push(count.done + " done")
+    if (count.working > 0) bits.push(count.working + " working")
     return bits.join("    ")
   }
 
@@ -540,14 +573,15 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.gaugeProviders.length === 0 ? "󱚣" : ""
-    labelVisible: root.gaugeProviders.length === 0
+    readonly property bool gaugesShown: root.gaugeProviders.length > 0 || sessionChip.visible
+    text: gaugesShown ? "" : "󱚣"
+    labelVisible: !gaugesShown
     hasVisualContent: true
     fontSize: Style.bar.iconFont
     // On a vertical bar (the Pebble Shell rail) the gauges stack: mark over
     // number, one agent under the other, at the rail's own width.
-    fixedWidth: button.vertical ? -1 : root.gaugeProviders.length === 0 ? Style.bar.iconSlot : gauges.implicitWidth + Style.space(20)
-    fixedHeight: button.vertical && root.gaugeProviders.length > 0 ? gauges.implicitHeight + Style.space(16) : -1
+    fixedWidth: button.vertical ? -1 : !gaugesShown ? Style.bar.iconSlot : gauges.implicitWidth + Style.space(20)
+    fixedHeight: button.vertical && gaugesShown ? gauges.implicitHeight + Style.space(16) : -1
     active: root.alarming
     tooltipText: root.gaugeTooltip()
     onPressed: function(buttonCode) {
@@ -641,12 +675,12 @@ Panel {
     Grid {
       id: gauges
       anchors.centerIn: parent
-      columns: button.vertical ? 1 : Math.max(1, root.gaugeProviders.length)
+      columns: button.vertical ? 1 : Math.max(1, root.gaugeProviders.length + (sessionChip.visible ? 1 : 0))
       rowSpacing: Style.space(10)
       columnSpacing: Style.space(12)
       horizontalItemAlignment: Grid.AlignHCenter
       verticalItemAlignment: Grid.AlignVCenter
-      visible: root.gaugeProviders.length > 0
+      visible: button.gaugesShown
       Repeater {
         model: root.gaugeProviders
         delegate: BarGauge {
@@ -654,24 +688,75 @@ Panel {
           agent: modelData
         }
       }
-    }
 
-    // A live Claude session: a dot in the corner that breathes while one is
-    // working and pulses the urgent colour while one is waiting on you.
-    Rectangle {
-      id: sessionDot
-      visible: root.sessionState !== ""
-      anchors.top: parent.top
-      anchors.right: parent.right
-      anchors.margins: Style.space(4)
-      width: Style.space(7); height: width; radius: width / 2
-      color: root.sessionState === "waiting" ? root.urgent : Commons.Color.accent
-      readonly property int beat: root.sessionState === "waiting" ? 450 : 1200
-      SequentialAnimation on opacity {
-        running: sessionDot.visible
-        loops: Animation.Infinite
-        NumberAnimation { to: 0.3; duration: sessionDot.beat; easing.type: Easing.InOutSine }
-        NumberAnimation { to: 1; duration: sessionDot.beat; easing.type: Easing.InOutSine }
+      // Live Claude sessions, on a chip of their own under the gauges so it
+      // never reads as part of a quota ring. It shows the most urgent state
+      // and how many sessions are in it: a filled urgent chip with "!" while
+      // one waits on you, an accent outline with a check for a finish you
+      // have not looked at, a spinning arc while they work.
+      Rectangle {
+        id: sessionChip
+        readonly property string mode: root.sessionSummary.state
+        readonly property color tone: mode === "waiting" ? root.urgent
+          : mode === "done" ? Commons.Color.accent : button.foreground
+        visible: mode !== ""
+        width: chipRow.implicitWidth + Style.space(12)
+        height: Style.space(19)
+        radius: height / 2
+        color: mode === "waiting" ? tone : "transparent"
+        border.width: mode === "waiting" ? 0 : Style.space(1.5)
+        border.color: mode === "done" ? tone : Qt.rgba(tone.r, tone.g, tone.b, 0.28)
+        Behavior on color { ColorAnimation { duration: 160 } }
+
+        SequentialAnimation on opacity {
+          running: sessionChip.mode === "waiting"
+          loops: Animation.Infinite
+          alwaysRunToEnd: true
+          NumberAnimation { to: 0.55; duration: 600; easing.type: Easing.InOutSine }
+          NumberAnimation { to: 1; duration: 600; easing.type: Easing.InOutSine }
+        }
+
+        Row {
+          id: chipRow
+          anchors.centerIn: parent
+          spacing: Style.space(4)
+
+          Item {
+            width: Style.space(9); height: width
+            anchors.verticalCenter: parent.verticalCenter
+            Shape {
+              anchors.fill: parent
+              visible: sessionChip.mode === "working"
+              preferredRendererType: Shape.CurveRenderer
+              ShapePath {
+                strokeColor: Commons.Color.accent
+                strokeWidth: Style.space(1.6); fillColor: "transparent"; capStyle: ShapePath.RoundCap
+                PathAngleArc { centerX: Style.space(4.5); centerY: Style.space(4.5); radiusX: Style.space(3.6); radiusY: Style.space(3.6); startAngle: 0; sweepAngle: 250 }
+              }
+              RotationAnimation on rotation { running: sessionChip.mode === "working"; loops: Animation.Infinite; from: 0; to: 360; duration: 1100 }
+            }
+            Text {
+              anchors.centerIn: parent
+              visible: sessionChip.mode !== "working"
+              text: sessionChip.mode === "waiting" ? "!" : "✓"
+              color: sessionChip.mode === "waiting" ? root.surface : sessionChip.tone
+              font.family: button.fontFamily
+              font.pixelSize: Style.space(10)
+              font.weight: Font.Bold
+              renderType: Text.NativeRendering
+            }
+          }
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.sessionSummary.count
+            color: sessionChip.mode === "waiting" ? root.surface : button.foreground
+            font.family: button.fontFamily
+            font.pixelSize: Style.space(10)
+            font.weight: Font.DemiBold
+            renderType: Text.NativeRendering
+          }
+        }
       }
     }
   }

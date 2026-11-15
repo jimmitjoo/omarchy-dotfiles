@@ -83,14 +83,15 @@ else
   branch=""
 fi
 
+replace=$(jq -r '.notify // 0' <<<"$old")
 since=$now
 [[ $(jq -r .state <<<"$old") == "$state" ]] && since=$(jq -r .since <<<"$old")
 
 jq -n --arg id "$id" --arg state "$state" --arg cwd "$cwd" --arg project "$project" \
   --arg branch "$branch" --arg window "$window" --argjson pid "${pid:-0}" \
-  --argjson started "$started" --argjson since "$since" \
+  --argjson started "$started" --argjson since "$since" --argjson notify "${replace:-0}" \
   '{id: $id, agent: "claude", state: $state, since: $since, started: $started,
-    cwd: $cwd, project: $project, branch: $branch, window: $window, pid: $pid}' >"$file.tmp"
+    cwd: $cwd, project: $project, branch: $branch, window: $window, pid: $pid, notify: $notify}' >"$file.tmp"
 mv "$file.tmp" "$file"
 
 # Sweep records of sessions that died without saying goodbye.
@@ -119,4 +120,8 @@ fi
 
 focus=()
 [[ -n $window ]] && focus=(--exec hyprctl dispatch focuswindow "address:$window")
-setsid omarchy-notification-send --app-name "Claude Code" -g "󰚩" -u normal "$headline" "$body" "${focus[@]}" &
+# One notification per session: each new one replaces the last instead of
+# stacking up a turn-by-turn history.
+notify=$(omarchy-notification-send --app-name "Claude Code" -g "󰚩" -u normal -r "${replace:-0}" -p \
+  "$headline" "$body" "${focus[@]}" </dev/null 2>/dev/null)
+[[ $notify =~ ^[0-9]+$ ]] && jq --argjson n "$notify" '.notify = $n' "$file" >"$file.tmp" && mv "$file.tmp" "$file"
