@@ -134,8 +134,23 @@ Panel {
     return root.alpha(root.foreground, 0.3)
   }
 
+  // The session the bar chip stands for: the one that has sat longest in the
+  // state the chip shows.
+  function chipSession() {
+    var pick = null
+    for (var i = 0; i < sessions.length; i++) {
+      var s = sessions[i]
+      if (s.state !== sessionSummary.state) continue
+      if (s.state === "done" && seenDone[doneKey(s)] === true) continue
+      if (!pick || Number(s.since) < Number(pick.since)) pick = s
+    }
+    return pick
+  }
+
   function focusSession(s) {
-    if (root.bar && s.window) root.bar.run("hyprctl dispatch focuswindow address:" + s.window)
+    // Hyprland 0.56 dispatches Lua; the address is checked before it goes in.
+    if (/^0x[0-9a-fA-F]+$/.test(String(s.window || "")))
+      Quickshell.execDetached(["hyprctl", "dispatch", 'hl.dsp.focus({ window = "address:' + s.window + '" })'])
     root.close()
   }
 
@@ -708,12 +723,35 @@ Panel {
         border.color: mode === "done" ? tone : Qt.rgba(tone.r, tone.g, tone.b, 0.28)
         Behavior on color { ColorAnimation { duration: 160 } }
 
-        SequentialAnimation on opacity {
-          running: sessionChip.mode === "waiting"
-          loops: Animation.Infinite
-          alwaysRunToEnd: true
-          NumberAnimation { to: 0.55; duration: 600; easing.type: Easing.InOutSine }
-          NumberAnimation { to: 1; duration: 600; easing.type: Easing.InOutSine }
+        // Clicking the chip jumps straight to the session it counts; the
+        // rest of the button still opens the panel.
+        MouseArea {
+          anchors.fill: parent
+          anchors.margins: -Style.space(4)
+          cursorShape: Qt.PointingHandCursor
+          onClicked: {
+            var s = root.chipSession()
+            if (s) root.focusSession(s)
+          }
+        }
+
+        // No looping animation here: it repaints the bar and the glass blur
+        // behind it every frame (measured ~30% CPU each for quickshell and
+        // Hyprland) for as long as a session runs. The chip pops once when
+        // what it says changes, twice when a session starts waiting on you,
+        // then stays still.
+        readonly property int count: root.sessionSummary.count
+        onModeChanged: popChip()
+        onCountChanged: popChip()
+        function popChip() {
+          if (mode === "") return
+          pop.loops = mode === "waiting" ? 2 : 1
+          pop.restart()
+        }
+        SequentialAnimation {
+          id: pop
+          NumberAnimation { target: sessionChip; property: "scale"; to: 1.25; duration: 140; easing.type: Easing.OutCubic }
+          NumberAnimation { target: sessionChip; property: "scale"; to: 1; duration: 260; easing.type: Easing.OutBack }
         }
 
         Row {
@@ -733,7 +771,6 @@ Panel {
                 strokeWidth: Style.space(1.6); fillColor: "transparent"; capStyle: ShapePath.RoundCap
                 PathAngleArc { centerX: Style.space(4.5); centerY: Style.space(4.5); radiusX: Style.space(3.6); radiusY: Style.space(3.6); startAngle: 0; sweepAngle: 250 }
               }
-              RotationAnimation on rotation { running: sessionChip.mode === "working"; loops: Animation.Infinite; from: 0; to: 360; duration: 1100 }
             }
             Text {
               anchors.centerIn: parent

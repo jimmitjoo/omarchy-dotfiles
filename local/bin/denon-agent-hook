@@ -69,7 +69,8 @@ else
   # which is the one you just started claude in.
   window=$(hyprctl clients -j | jq -r --argjson pids "[$(IFS=,; echo "${ancestors[*]}")]" \
     'map(select(.pid as $p | $pids | index($p))) | if length == 1 then .[0].address else empty end')
-  [[ -n $window ]] || window=$(hyprctl activewindow -j | jq -r '.address // empty')
+  # A scheduled run (agent-at) has no window at all, and sends its own notification.
+  [[ -n $window || -n $DENON_AGENT_HEADLESS ]] || window=$(hyprctl activewindow -j | jq -r '.address // empty')
   started=$now
 fi
 
@@ -105,7 +106,7 @@ publish
 
 # Ping only when the session hands the turn back, and not while you are
 # already looking at its window. Clicking the notification jumps to it.
-[[ $state == working || $event == SessionStart ]] && exit 0
+[[ $state == working || $event == SessionStart || -n $DENON_AGENT_HEADLESS ]] && exit 0
 [[ -n $window && $(hyprctl activewindow -j | jq -r '.address // empty') == "$window" ]] && exit 0
 
 label=$project
@@ -119,7 +120,7 @@ else
 fi
 
 focus=()
-[[ -n $window ]] && focus=(--exec hyprctl dispatch focuswindow "address:$window")
+[[ -n $window ]] && focus=(--exec hyprctl dispatch "hl.dsp.focus({ window = \"address:$window\" })")
 # One notification per session: each new one replaces the last instead of
 # stacking up a turn-by-turn history.
 notify=$(omarchy-notification-send --app-name "Claude Code" -g "󰚩" -u normal -r "${replace:-0}" -p \

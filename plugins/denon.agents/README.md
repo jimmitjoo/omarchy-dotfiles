@@ -157,7 +157,7 @@ it is working, waiting on you, or done. Click a row to jump to its terminal.
 Under the gauges, a chip shows the most urgent state and how many sessions
 are in it: filled in the urgent colour with "!" while one waits on a
 permission prompt or a question, an accent outline with a check for a finished
-session whose window you have not looked at yet, and a spinning arc while
+session whose window you have not looked at yet, and an arc while
 they work. When a session finishes or needs you and its window is not
 focused, a notification comes in; clicking it focuses that window. Each
 session keeps one notification, updated in place rather than stacked.
@@ -166,6 +166,12 @@ session keeps one notification, updated in place rather than stacked.
 a fresh git worktree of the focused terminal's repository, so agents working
 in parallel never touch each other's files. Each shows up here under its own
 branch.
+
+`agent-at <when> <prompt>` runs a prompt headless at a set time, in the
+directory you scheduled it from: once (`"tomorrow 07:00"`, `"2 hours"`) or on
+a systemd calendar spec (`"Mon..Fri 08:00"`). The answer is saved and a
+notification opens it. `agent-at` alone lists what is scheduled,
+`agent-at --cancel <id>` drops one. Schedules do not survive a reboot.
 
 `agent-guard` is a separate PreToolUse hook that refuses `rm -rf ~`, force
 pushes, `git reset --hard`, `git clean -f` and the like, even in bypass mode.

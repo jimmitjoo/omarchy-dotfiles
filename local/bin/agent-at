@@ -1,0 +1,71 @@
+#!/bin/bash
+# Schedule a Claude Code prompt to run at a set time, headless, in the current
+# directory. The answer is saved and a notification opens it.
+#   agent-at <when> <prompt...>   schedule a prompt
+#   agent-at                      list what is scheduled
+#   agent-at --cancel <id>        cancel one
+# <when> is anything `date -d` reads ("17:45", "tomorrow 07:00", "2 hours",
+# "next monday 09:00"), which runs once, or a systemd calendar spec
+# ("Mon..Fri 08:00", "daily", "hourly"), which repeats.
+# ponytail: transient timers, so schedules do not survive a reboot; write
+# unit files to ~/.config/systemd/user if that ever matters.
+
+state="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/agents/scheduled"
+
+# The timer fires this: run the prompt and hand the answer to a notification.
+if [[ $1 == --run ]]; then
+  job=$2
+  out="$job/answer.md"
+  # Lets denon-agent-hook know there is no terminal window to point at.
+  export DENON_AGENT_HEADLESS=1
+  if claude -p --permission-mode auto "$(cat "$job/prompt")" >"$out" 2>&1; then
+    headline="Scheduled Claude run is done"
+  else
+    headline="Scheduled Claude run failed"
+  fi
+  omarchy-notification-send --app-name "Claude Code" -g "󰚩" -u normal "$headline" \
+    "$(head -c 120 "$job/prompt")" --exec xdg-terminal-exec less "$out"
+  exit 0
+fi
+
+if (($# == 0)); then
+  systemctl --user list-timers 'agent-at-*' --no-pager
+  for job in "$state"/*/; do
+    [[ -f $job/prompt ]] || continue
+    systemctl --user -q is-active "agent-at-$(basename "$job").timer" || continue
+    printf '%s  %s\n' "$(basename "$job")" "$(head -n1 "$job/prompt")"
+  done
+  exit 0
+fi
+
+if [[ $1 == --cancel ]]; then
+  systemctl --user stop "agent-at-$2.timer" && echo "Cancelled $2"
+  exit
+fi
+
+when=$1
+shift
+(($# > 0)) || { echo "Usage: agent-at <when> <prompt...>" >&2; exit 1; }
+
+if at=$(date -d "$when" +%s 2>/dev/null); then
+  # A bare clock time that has already passed today means tomorrow.
+  [[ $when =~ ^[0-9]{1,2}:[0-9]{2}$ ]] && ((at <= $(date +%s))) && at=$((at + 86400))
+  ((at > $(date +%s))) || { echo "agent-at: $when has already passed" >&2; exit 1; }
+  calendar=$(date -d "@$at" '+%F %T')
+elif systemd-analyze calendar "$when" >/dev/null 2>&1; then
+  calendar=$when
+else
+  echo "agent-at: cannot read the time \"$when\"" >&2
+  exit 1
+fi
+
+id=$(date +%Y%m%d-%H%M%S)
+job="$state/$id"
+mkdir -p "$job"
+printf '%s\n' "$*" >"$job/prompt"
+
+systemd-run --user --quiet --unit "agent-at-$id" --on-calendar "$calendar" --timer-property AccuracySec=1s \
+  --working-directory "$PWD" --setenv PATH="$PATH" \
+  "$HOME/.local/bin/agent-at" --run "$job" || exit 1
+
+echo "Scheduled $id for $(systemctl --user show "agent-at-$id.timer" -p NextElapseUSecRealtime --value)"
