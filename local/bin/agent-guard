@@ -1,0 +1,23 @@
+#!/bin/bash
+# Claude Code PreToolUse hook for Bash: refuses the few commands that destroy
+# work you cannot get back, even in bypass-permissions mode. Claude sees the
+# reason and has to ask you; run the command yourself (with !) if you meant it.
+# ponytail: pattern matching, not a sandbox; a determined `eval` gets past it.
+
+cmd=$(jq -r '.tool_input.command // empty')
+
+block() { echo "Blocked by agent-guard: $1. Ask the user to run it themselves if it is really intended." >&2; exit 2; }
+
+home='(~|\$HOME|\$\{HOME\}|'"$HOME"')/?'
+# The rest of one command: stops at a separator or line break, so prose in a
+# heredoc that mentions "push" and "-f" lines apart is not a force push.
+s=$'[^;&|\n]*'
+[[ $cmd =~ rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)+(\"|\')?($home\*?|/|/\*|\*)(\"|\')?([[:space:];|&]|$) ]] &&
+  block "recursive delete of home, root or everything here"
+[[ $cmd =~ git[[:space:]]${s}push$s(--force([[:space:]]|$)|[[:space:]]-[a-zA-Z]*f) ]] && block "force push (use --force-with-lease on a feature branch)"
+[[ $cmd =~ git[[:space:]]${s}push$s--force-with-lease$s[[:space:]:](main|master)([[:space:]]|$) ]] && block "force push to main"
+[[ $cmd =~ git[[:space:]]+reset[[:space:]]$s--hard ]] && block "git reset --hard throws away uncommitted work"
+[[ $cmd =~ git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*f ]] && block "git clean deletes untracked files"
+[[ $cmd =~ git[[:space:]]+(checkout|restore)[[:space:]]+(--[[:space:]]+)?\.([[:space:]]|$) ]] && block "discarding every uncommitted change"
+[[ $cmd =~ (mkfs|wipefs|dd[[:space:]]$s[[:space:]]of=/dev/) ]] && block "writing to a block device"
+exit 0

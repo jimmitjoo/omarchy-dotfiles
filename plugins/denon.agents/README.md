@@ -148,3 +148,38 @@ One caveat on "all-time": the Codex collector only reads native session files
 touched in the last 30 days, and Fireworks requests the last 30 days from its
 billing API, so their totals and day counts cover that window. Claude's cover
 every transcript still on disk.
+
+## Live sessions
+
+With the `denon-agent-hook` Claude Code hook wired up, every running Claude
+session gets a row at the top of the panel: repository, branch, and whether
+it is working, waiting on you, or done. Click a row to jump to its terminal.
+The bar shows a dot that breathes while a session works and pulses the
+urgent colour while one waits on a permission prompt or a question. When a session finishes
+or needs you and its window is not focused, a notification comes in; clicking
+it focuses that window.
+
+`agent-worktree` (bound to Super + Alt + A) starts Claude in a new terminal and
+a fresh git worktree of the focused terminal's repository, so agents working
+in parallel never touch each other's files. Each shows up here under its own
+branch.
+
+`agent-guard` is a separate PreToolUse hook that refuses `rm -rf ~`, force
+pushes, `git reset --hard`, `git clean -f` and the like, even in bypass mode.
+
+The installer does not touch `~/.claude/settings.json`; add the hooks there:
+
+```json
+"hooks": {
+  "SessionStart":     [{ "hooks": [{ "type": "command", "command": "~/.local/bin/denon-agent-hook" }] }],
+  "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "~/.local/bin/denon-agent-hook" }] }],
+  "PostToolUse":      [{ "hooks": [{ "type": "command", "command": "~/.local/bin/denon-agent-hook" }] }],
+  "Stop":             [{ "hooks": [{ "type": "command", "command": "~/.local/bin/denon-agent-hook" }] }],
+  "SessionEnd":       [{ "hooks": [{ "type": "command", "command": "~/.local/bin/denon-agent-hook" }] }],
+  "Notification":     [{ "matcher": "permission_prompt|elicitation_dialog",
+                         "hooks": [{ "type": "command", "command": "~/.local/bin/denon-agent-hook" }] }],
+  "PreToolUse":       [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "~/.local/bin/agent-guard" }] },
+                       { "matcher": "AskUserQuestion",
+                         "hooks": [{ "type": "command", "command": "~/.local/bin/denon-agent-hook" }] }]
+}
+```

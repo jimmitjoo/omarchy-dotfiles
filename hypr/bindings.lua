@@ -111,3 +111,6 @@ end
 -- flea --picker: begin. Written by `flea --picker`; `flea --picker off` removes the block whole.
 o.window("com.thisisgm.flea.picker", { tag = "+floating-window" })
 -- flea --picker: end.
+
+-- A Claude Code session in its own git worktree of the focused terminal's repo.
+o.bind("SUPER + ALT + A", "Agent in new worktree", os.getenv("HOME") .. "/.local/bin/agent-worktree")

@@ -50,6 +50,59 @@ Panel {
     && balance.remaining / balance.funded <= 0.1
   readonly property bool alarming: (!!headline && headline.percent >= 0.9) || balanceAlarming
 
+  // ---------------------------------------------------------------- sessions
+  //
+  // Live Claude Code sessions, one record each, published by the
+  // denon-agent-hook Claude Code hook into a single file.
+  property var sessions: []
+  // What the bar dot says: someone waiting on you beats anyone working.
+  readonly property string sessionState: {
+    var working = false
+    for (var i = 0; i < sessions.length; i++) {
+      if (sessions[i].state === "waiting") return "waiting"
+      if (sessions[i].state === "working") working = true
+    }
+    return working ? "working" : ""
+  }
+
+  FileView {
+    path: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state") + "/omarchy/agents/sessions.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: {
+      try {
+        var parsed = JSON.parse(String(text() || "[]"))
+        root.sessions = Array.isArray(parsed) ? parsed : []
+      } catch (e) {
+        root.sessions = []
+      }
+    }
+    onLoadFailed: root.sessions = []
+  }
+
+  function sessionLabel(s) {
+    return String(s.project || "session") + (s.branch ? " · " + s.branch : "")
+  }
+
+  function sessionStateText(s) {
+    var ms = root.nowMs - Number(s.since || 0) * 1000
+    if (s.state === "waiting") return "needs you"
+    if (s.state === "working") return "working " + formatDuration(ms)
+    return "done " + formatDuration(ms) + " ago"
+  }
+
+  function sessionColor(s) {
+    if (s.state === "waiting") return root.urgent
+    if (s.state === "working") return Commons.Color.accent
+    return root.alpha(root.foreground, 0.3)
+  }
+
+  function focusSession(s) {
+    if (root.bar && s.window) root.bar.run("hyprctl dispatch focuswindow address:" + s.window)
+    root.close()
+  }
+
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
   function alpha(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
 
@@ -406,7 +459,7 @@ Panel {
   // Nothing to report, nothing in the bar: Bar.qml collapses a slot whose item
   // is invisible, so the icon appears the moment the first scan finds usage and
   // stays away entirely on a machine that has never run either CLI.
-  visible: providers.length > 0
+  visible: providers.length > 0 || sessions.length > 0
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -473,6 +526,13 @@ Panel {
       }
       bits.push(line)
     }
+    var waiting = 0, working = 0
+    for (var k = 0; k < sessions.length; k++) {
+      if (sessions[k].state === "waiting") waiting++
+      else if (sessions[k].state === "working") working++
+    }
+    if (waiting > 0) bits.push(waiting + " waiting on you")
+    if (working > 0) bits.push(working + " working")
     return bits.join("    ")
   }
 
@@ -595,6 +655,25 @@ Panel {
         }
       }
     }
+
+    // A live Claude session: a dot in the corner that breathes while one is
+    // working and pulses the urgent colour while one is waiting on you.
+    Rectangle {
+      id: sessionDot
+      visible: root.sessionState !== ""
+      anchors.top: parent.top
+      anchors.right: parent.right
+      anchors.margins: Style.space(4)
+      width: Style.space(7); height: width; radius: width / 2
+      color: root.sessionState === "waiting" ? root.urgent : Commons.Color.accent
+      readonly property int beat: root.sessionState === "waiting" ? 450 : 1200
+      SequentialAnimation on opacity {
+        running: sessionDot.visible
+        loops: Animation.Infinite
+        NumberAnimation { to: 0.3; duration: sessionDot.beat; easing.type: Easing.InOutSine }
+        NumberAnimation { to: 1; duration: sessionDot.beat; easing.type: Easing.InOutSine }
+      }
+    }
   }
 
   Motion.PopupPanel {
@@ -685,6 +764,62 @@ Panel {
                 }
                 MouseArea { id: refreshMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.refreshNow() }
                 PanelToolTip { visible: refreshMouse.containsMouse; text: "Refresh (R)"; fontFamily: root.fontFamily }
+              }
+            }
+          }
+
+          // ---------- Live Claude sessions: click one to jump to it ----------
+          Column {
+            visible: root.sessions.length > 0
+            width: parent.width
+            spacing: Style.space(2)
+            Repeater {
+              model: root.sessions
+              delegate: Rectangle {
+                id: sessionRow
+                required property var modelData
+                width: parent.width
+                height: Style.space(34)
+                radius: Style.space(10)
+                color: sessionMouse.containsMouse ? root.alpha(root.foreground, 0.08) : root.alpha(root.foreground, 0.03)
+                Rectangle {
+                  id: rowDot
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(12)
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: Style.space(8); height: width; radius: width / 2
+                  color: root.sessionColor(sessionRow.modelData)
+                }
+                Text {
+                  anchors.left: rowDot.right
+                  anchors.leftMargin: Style.space(10)
+                  anchors.right: stateLabel.left
+                  anchors.rightMargin: Style.space(10)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.sessionLabel(sessionRow.modelData)
+                  textFormat: Text.PlainText
+                  elide: Text.ElideRight
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                }
+                Text {
+                  id: stateLabel
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.space(12)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.sessionStateText(sessionRow.modelData)
+                  color: sessionRow.modelData.state === "waiting" ? root.urgent : root.alpha(root.foreground, 0.55)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption + 1
+                }
+                MouseArea {
+                  id: sessionMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.focusSession(sessionRow.modelData)
+                }
               }
             }
           }

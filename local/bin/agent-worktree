@@ -1,0 +1,14 @@
+#!/bin/bash
+# Start Claude Code in a new terminal, in a fresh git worktree of the repository
+# the focused terminal is in, so parallel agents never edit the same files.
+# The session shows up in the My Agents bar widget under its branch.
+#   agent-worktree [name]   without a name, Claude picks one
+# Claude asks whether to keep or remove the worktree when the session ends.
+
+dir=$(omarchy-cmd-terminal-cwd)
+if ! git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  omarchy-notification-send -g "󰚩" "No repository here" "Focus a terminal inside a git repository first"
+  exit 1
+fi
+
+exec setsid uwsm-app -- xdg-terminal-exec --dir="$dir" claude --permission-mode auto --worktree ${1:+"$1"}
