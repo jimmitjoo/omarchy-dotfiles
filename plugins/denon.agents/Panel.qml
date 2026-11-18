@@ -55,51 +55,34 @@ Panel {
   //
   // Live Claude Code sessions, one record each, published by the
   // denon-agent-hook Claude Code hook into a single file.
-  property var sessions: []
+  property var sessionRecords: []
 
-  // A finished session counts as "your move" until you have looked at its
-  // window. Keyed by when it finished, so the next finish counts again.
-  // ponytail: in memory only, so a shell restart shows old finishes once more.
-  property var seenDone: ({})
-  readonly property string activeWindow: Hyprland.activeToplevel ? String(Hyprland.activeToplevel.address || "") : ""
-
-  function sameWindow(a, b) {
-    return a !== "" && String(a).replace(/^0x/, "") === String(b).replace(/^0x/, "")
+  // A session whose terminal window is gone is over, even when Claude never
+  // got to fire SessionEnd (closing the window kills it). Scheduled runs
+  // (agent-at) have no window and stay until they end.
+  readonly property var sessions: {
+    var open = {}
+    var windows = Hyprland.toplevels.values
+    for (var i = 0; i < windows.length; i++) open[String(windows[i].address).replace(/^0x/, "")] = true
+    return sessionRecords.filter(function(s) {
+      return !s.window || open[String(s.window).replace(/^0x/, "")] === true
+    })
   }
-
-  function doneKey(s) { return s.id + ":" + s.since }
-
-  function markSeen() {
-    var seen = {}
-    var changed = false
-    for (var i = 0; i < sessions.length; i++) {
-      var s = sessions[i]
-      if (s.state !== "done") continue
-      var key = doneKey(s)
-      seen[key] = seenDone[key] === true || sameWindow(activeWindow, s.window)
-      if (seen[key] !== (seenDone[key] === true)) changed = true
-    }
-    // Rebuilt from the live sessions, so ended ones drop out of the map.
-    if (changed || Object.keys(seen).length !== Object.keys(seenDone).length) seenDone = seen
-  }
-
-  onSessionsChanged: markSeen()
-  onActiveWindowChanged: markSeen()
 
   // What the bar chip says, most urgent first: sessions waiting on you, then
-  // finished ones you have not looked at, then the ones still working.
+  // the ones working, then finished ones (which stay until their window closes).
   readonly property var sessionSummary: {
-    var count = { waiting: 0, done: 0, working: 0 }
-    for (var i = 0; i < sessions.length; i++) {
-      var s = sessions[i]
-      if (s.state === "done" && seenDone[doneKey(s)] === true) continue
-      if (count[s.state] !== undefined) count[s.state]++
-    }
-    var order = ["waiting", "done", "working"]
+    var count = { waiting: 0, working: 0, done: 0 }
+    for (var i = 0; i < sessions.length; i++)
+      if (count[sessions[i].state] !== undefined) count[sessions[i].state]++
+    var order = ["waiting", "working", "done"]
     for (var k = 0; k < order.length; k++)
       if (count[order[k]] > 0) return { state: order[k], count: count[order[k]], all: count }
     return { state: "", count: 0, all: count }
   }
+
+  // Not in the theme palette; a calm green that reads on dark and light bars.
+  readonly property color doneColor: "#7fb27a"
 
   FileView {
     path: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state") + "/omarchy/agents/sessions.json"
@@ -109,12 +92,12 @@ Panel {
     onLoaded: {
       try {
         var parsed = JSON.parse(String(text() || "[]"))
-        root.sessions = Array.isArray(parsed) ? parsed : []
+        root.sessionRecords = Array.isArray(parsed) ? parsed : []
       } catch (e) {
-        root.sessions = []
+        root.sessionRecords = []
       }
     }
-    onLoadFailed: root.sessions = []
+    onLoadFailed: root.sessionRecords = []
   }
 
   function sessionLabel(s) {
@@ -131,7 +114,7 @@ Panel {
   function sessionColor(s) {
     if (s.state === "waiting") return root.urgent
     if (s.state === "working") return Commons.Color.accent
-    return root.alpha(root.foreground, 0.3)
+    return root.doneColor
   }
 
   // The session the bar chip stands for: the one that has sat longest in the
@@ -141,7 +124,6 @@ Panel {
     for (var i = 0; i < sessions.length; i++) {
       var s = sessions[i]
       if (s.state !== sessionSummary.state) continue
-      if (s.state === "done" && seenDone[doneKey(s)] === true) continue
       if (!pick || Number(s.since) < Number(pick.since)) pick = s
     }
     return pick
@@ -707,13 +689,13 @@ Panel {
       // Live Claude sessions, on a chip of their own under the gauges so it
       // never reads as part of a quota ring. It shows the most urgent state
       // and how many sessions are in it: a filled urgent chip with "!" while
-      // one waits on you, an accent outline with a check for a finish you
-      // have not looked at, a spinning arc while they work.
+      // one waits on you, an accent dot while they work, and a green check
+      // for finished sessions until their terminal window is closed.
       Rectangle {
         id: sessionChip
         readonly property string mode: root.sessionSummary.state
         readonly property color tone: mode === "waiting" ? root.urgent
-          : mode === "done" ? Commons.Color.accent : button.foreground
+          : mode === "done" ? root.doneColor : button.foreground
         visible: mode !== ""
         width: chipRow.implicitWidth + Style.space(12)
         height: Style.space(19)
@@ -762,15 +744,11 @@ Panel {
           Item {
             width: Style.space(9); height: width
             anchors.verticalCenter: parent.verticalCenter
-            Shape {
-              anchors.fill: parent
+            Rectangle {
+              anchors.centerIn: parent
               visible: sessionChip.mode === "working"
-              preferredRendererType: Shape.CurveRenderer
-              ShapePath {
-                strokeColor: Commons.Color.accent
-                strokeWidth: Style.space(1.6); fillColor: "transparent"; capStyle: ShapePath.RoundCap
-                PathAngleArc { centerX: Style.space(4.5); centerY: Style.space(4.5); radiusX: Style.space(3.6); radiusY: Style.space(3.6); startAngle: 0; sweepAngle: 250 }
-              }
+              width: Style.space(7); height: width; radius: width / 2
+              color: Commons.Color.accent
             }
             Text {
               anchors.centerIn: parent

@@ -156,9 +156,9 @@ session gets a row at the top of the panel: repository, branch, and whether
 it is working, waiting on you, or done. Click a row to jump to its terminal.
 Under the gauges, a chip shows the most urgent state and how many sessions
 are in it: filled in the urgent colour with "!" while one waits on a
-permission prompt or a question, an accent outline with a check for a finished
-session whose window you have not looked at yet, and an arc while
-they work. When a session finishes or needs you and its window is not
+permission prompt or a question, an accent dot while they work, and a green
+check for finished sessions, which stays until you close their terminal
+window. When a session finishes or needs you and its window is not
 focused, a notification comes in; clicking it focuses that window. Each
 session keeps one notification, updated in place rather than stacked.
 
